@@ -1,8 +1,14 @@
+#!/usr/bin/env python3
+"""
+Модуль утилит для приложения синхронизации Microsoft To Do и Kaiten
+"""
+
 import json
 import os
-from typing import Dict, Any, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from typing import Dict, Optional, Any
 import re
+
 
 def load_mapping(mapping_file: str) -> Dict[str, Any]:
     """Загружает сопоставления задач из файла"""
@@ -11,10 +17,12 @@ def load_mapping(mapping_file: str) -> Dict[str, Any]:
             return json.load(f)
     return {}
 
+
 def save_mapping(mapping: Dict[str, Any], mapping_file: str) -> None:
     """Сохраняет сопоставления задач в файл"""
     with open(mapping_file, "w", encoding="utf-8") as f:
         json.dump(mapping, f, ensure_ascii=False, indent=2)
+
 
 def compute_todo_hash(task: Dict[str, Any]) -> str:
     """Вычисляет хэш задачи Microsoft To Do"""
@@ -24,7 +32,6 @@ def compute_todo_hash(task: Dict[str, Any]) -> str:
     
     if due:
         # Конвертируем дату из UTC в сахалинское время для правильного извлечения даты
-        from datetime import datetime, timezone, timedelta
         try:
             if due.endswith("Z"):
                 utc_time_str = due[:-1]  # Убираем Z
@@ -52,6 +59,7 @@ def compute_todo_hash(task: Dict[str, Any]) -> str:
     
     return f"{task['title']}|{desc}|{due_str}|{task['status']}"
 
+
 def compute_kaiten_hash(card: Dict[str, Any]) -> str:
     """Вычисляет хэш карточки Kaiten"""
     desc = card.get("description") or ""
@@ -64,12 +72,11 @@ def compute_kaiten_hash(card: Dict[str, Any]) -> str:
     status = "completed" if card.get("state") == 2 else "notStarted"
     return f"{card['title']}|{desc}|{due}|{status}"
 
+
 def todo_date_to_kaiten_date(todo_due: str) -> Optional[str]:
     """Конвертирует дату из формата To Do в формат Kaiten с учетом часового пояса Сахалинска (UTC+11)"""
     if not todo_due:
         return None
-    
-    from datetime import timedelta, timezone
     
     try:
         # Разбираем строку даты/времени из формата ISO
@@ -78,17 +85,31 @@ def todo_date_to_kaiten_date(todo_due: str) -> Optional[str]:
             utc_time_str = todo_due[:-1] # Убираем Z
             dt = datetime.fromisoformat(utc_time_str.replace('Z', '+00:00'))
         else:
-            # Microsoft To Do может возвращать дату в формате с лишними нулями, например, 2025-10-05T13:00:00.0000000
-            # Попробуем нормализовать формат
-            if ".0000" in todo_due:
-                # Убираем лишние нули и заменяем на Z
-                utc_time_str = todo_due.replace(".00000", ".000Z")
-                dt = datetime.fromisoformat(utc_time_str)
-            elif ".0000" in todo_due:
-                # Убираем лишние нули и заменяем на Z
-                utc_time_str = todo_due.replace(".0000", ".000Z")
-            else:
-                dt = datetime.fromisoformat(todo_due)
+            # Microsoft To Do может возвращать дату в формате с лишними нулями, например, 2025-10-05T13:00.00000
+            # Попробуем нормализовать формат, обрабатывая разные варианты нестандартного формата
+            normalized_todo_due = todo_due
+            # Обрабатываем форматы с лишними нулями после точки, приводя к стандартному формату ISO с 3 знаками
+            if ".0" in normalized_todo_due:
+                # Найдем часть с миллисекундами и усечем до 3 знаков
+                # Ищем шаблон .XXXXX (где X - цифры после точки)
+                match = re.search(r'(\.\d+)([+-]\d{2}:\d{2}|Z)?$', normalized_todo_due)
+                if match:
+                    milliseconds_part = match.group(1)
+                    timezone_part = match.group(2) or ""
+                    milliseconds = milliseconds_part[1:]  # Убираем точку
+                    if len(milliseconds) > 3:
+                        # Усекаем до 3 знаков
+                        normalized_milliseconds = milliseconds[:3]
+                        # Заменяем только миллисекунды, сохраняя часовой пояс
+                        normalized_todo_due = re.sub(r'\.\d+([+-]\d{2}:\d{2}|Z)?$', f'.{normalized_milliseconds}{timezone_part}', normalized_todo_due)
+                    elif len(milliseconds) < 3:
+                        # Добавляем нули до 3 знаков
+                        normalized_milliseconds = milliseconds.ljust(3, '0')
+                        # Заменяем только миллисекунды, сохраняя часовой пояс
+                        normalized_todo_due = re.sub(r'\.\d+([+-]\d{2}:\d{2}|Z)?$', f'.{normalized_milliseconds}{timezone_part}', normalized_todo_due)
+        
+            # Проверяем, что теперь формат соответствует ISO
+            dt = datetime.fromisoformat(normalized_todo_due)
         
         # Убедимся, что дата имеет информацию о часовом поясе
         if dt.tzinfo is None:
@@ -102,24 +123,19 @@ def todo_date_to_kaiten_date(todo_due: str) -> Optional[str]:
         sakhalin_time = dt.astimezone(sakhalin_tz)
         
         # Для Kaiten возвращаем только дату в формате YYYY-MM-DD
-        result = sakhalin_time.date().isoformat()
-        print(f"DEBUG: todo_date_to_kaiten_date: {todo_due} -> {result}")
-        return result
+        return sakhalin_time.date().isoformat()
     except ValueError:
         # Если формат даты некорректен, возвращаем только дату
         if "T" in todo_due:
-            result = todo_due.split("T")[0]
+            return todo_due.split("T")[0]
         else:
-            result = todo_due
-        print(f"DEBUG: todo_date_to_kaiten_date (fallback): {todo_due} -> {result}")
-        return result
+            return todo_due
+
 
 def kaiten_date_to_todo_date(kaiten_due: str) -> Optional[str]:
     """Конвертирует дату из формата Kaiten в формат To Do, сохраняя дневной формат даты"""
     if not kaiten_due:
         return None
-    
-    from datetime import timedelta, timezone
     
     # Если дата уже содержит время (в формате ISO), просто конвертируем из сахалинского времени в UTC
     if "T" in kaiten_due:
@@ -133,16 +149,13 @@ def kaiten_date_to_todo_date(kaiten_due: str) -> Optional[str]:
             
             # Конвертируем сахалинское время в UTC
             utc_time = dt.astimezone(timezone.utc)
-            result = utc_time.isoformat().replace('+00:00', 'Z')
-            print(f"DEBUG: kaiten_date_to_todo_date: {kaiten_due} -> {result}")
-            return result
+            return utc_time.isoformat().replace('+00:00', 'Z')
         except ValueError:
             # Если формат некорректен, возвращаем как есть
-            print(f"DEBUG: kaiten_date_to_todo_date (fallback): {kaiten_due} -> {kaiten_due}")
             return kaiten_due
     
     # Для даты без времени, чтобы сохранить дневной формат,
-    # передаем дату с 00:00 сахалинского времени, но конвертируем в UTC так,
+    # передаем дату с 00:0 сахалинского времени, но конвертируем в UTC так,
     # чтобы дата в To Do оставалась той же
     try:
         # Создаем дату с 0:0 сахалинского времени
@@ -156,10 +169,6 @@ def kaiten_date_to_todo_date(kaiten_due: str) -> Optional[str]:
         # Если дата в UTC отличается от исходной, используем следующий подход:
         # Microsoft To Do может интерпретировать дату по локальному времени пользователя,
         # поэтому просто передаем дату как YYYY-MM-DDT00:00:00Z
-        result = f"{kaiten_due}T00:00:00Z"
-        print(f"DEBUG: kaiten_date_to_todo_date (date only): {kaiten_due} -> {result}")
-        return result
+        return f"{kaiten_due}T00:00:00Z"
     except ValueError:
-        result = f"{kaiten_due}T00:00.000Z"
-        print(f"DEBUG: kaiten_date_to_todo_date (fallback date): {kaiten_due} -> {result}")
-        return result
+        return f"{kaiten_due}T00:00.000Z"
