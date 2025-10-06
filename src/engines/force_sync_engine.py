@@ -6,11 +6,21 @@
 from typing import Dict, Any
 import logging
 
-from src.exceptions.exceptions import MicrosoftTodoError, KaitenError
-from src.config.config import Config
-from src.utils.utils import load_mapping, save_mapping, compute_todo_hash, compute_kaiten_hash, todo_date_to_kaiten_date, kaiten_date_to_todo_date
-from src.clients.todo_client import MicrosoftTodoClient
-from src.clients.kaiten_client import KaitenClient
+try:
+    from src.exceptions.exceptions import MicrosoftTodoError, KaitenError
+    from src.config.config import Config
+    from src.utils.utils import load_mapping, save_mapping, compute_todo_hash, compute_kaiten_hash, todo_date_to_kaiten_date, kaiten_date_to_todo_date
+    from src.clients.todo_client import MicrosoftTodoClient
+    from src.clients.kaiten_client import KaitenClient
+except ImportError:
+    import sys
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+    from exceptions.exceptions import MicrosoftTodoError, KaitenError
+    from config.config import Config
+    from utils.utils import load_mapping, save_mapping, compute_todo_hash, compute_kaiten_hash, todo_date_to_kaiten_date, kaiten_date_to_todo_date
+    from clients.todo_client import MicrosoftTodoClient
+    from clients.kaiten_client import KaitenClient
 
 
 logger = logging.getLogger(__name__)

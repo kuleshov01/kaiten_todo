@@ -6,9 +6,17 @@
 import sys
 import logging
 
-from src.config.config import Config
-from src.engines.sync_engine import SyncEngine
-from src.engines.force_sync_engine import ForceSyncEngine
+try:
+    from src.config.config import Config
+    from src.engines.sync_engine import SyncEngine
+    from src.engines.force_sync_engine import ForceSyncEngine
+except ImportError:
+    import sys
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+    from config.config import Config
+    from engines.sync_engine import SyncEngine
+    from engines.force_sync_engine import ForceSyncEngine
 
 
 # === Логирование ===

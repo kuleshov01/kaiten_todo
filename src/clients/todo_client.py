@@ -7,8 +7,15 @@ import os
 from typing import Dict, Optional, Any
 import logging
 
-from src.exceptions.exceptions import MicrosoftTodoError
-from src.config.config import Config
+try:
+    from src.exceptions.exceptions import MicrosoftTodoError
+    from src.config.config import Config
+except ImportError:
+    import sys
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+    from exceptions.exceptions import MicrosoftTodoError
+    from config.config import Config
 
 
 logger = logging.getLogger(__name__)
@@ -111,6 +118,20 @@ class MicrosoftTodoClient:
             logger.error(f"❌ Не удалось обновить задачу в To Do: {resp.status_code} {resp.text[:200]}")
             return False
 
+    def delete_task(self, access_token: str, list_id: str, task_id: str) -> bool:
+        import requests
+        url = f"https://graph.microsoft.com/v1.0/me/todo/lists/{list_id}/tasks/{task_id}"
+        
+        headers = {"Authorization": f"Bearer {access_token}"}
+        resp = requests.delete(url, headers=headers)
+        
+        if resp.status_code == 204:
+            logger.info(f"🗑️ To Do ← Kaiten | Удалена задача: {task_id}")
+            return True
+        else:
+            logger.error(f"❌ Не удалось удалить задачу {task_id} в To Do: {resp.status_code} {resp.text[:200]}")
+            return False
+    
     def create_task(self, access_token: str, list_id: str,
                     title: str, description: str = None, due_date: str = None, status: str = "notStarted") -> Optional[str]:
         import requests
