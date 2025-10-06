@@ -128,18 +128,24 @@ class MicrosoftTodoClient:
             logger.error(f"❌ Не удалось обновить задачу в To Do: {resp.status_code} {resp.text[:200]}")
             return False
 
-    def create_task(self, access_token: str, list_id: str, 
-                    title: str, description: str = None, due_date: str = None) -> Optional[str]:
+    def create_task(self, access_token: str, list_id: str,
+                    title: str, description: str = None, due_date: str = None, status: str = "notStarted") -> Optional[str]:
         url = f"https://graph.microsoft.com/v1.0/me/todo/lists/{list_id}/tasks"
         payload = {
             "title": title,
-            "status": "notStarted"
+            "status": status
         }
         
         if description:
             payload["body"] = {"content": description, "contentType": "text"}
-        if due_date:
-            payload["dueDateTime"] = {"dateTime": due_date, "timeZone": "UTC"}
+        # Проверяем, что дата не пустая и не содержит недопустимых значений
+        if due_date and due_date != "None" and due_date != "null":
+            # Проверяем, что дата в правильном формате
+            if "T" in due_date:
+                payload["dueDateTime"] = {"dateTime": due_date, "timeZone": "UTC"}
+            else:
+                # Если дата в формате YYYY-MM-DD, добавляем время
+                payload["dueDateTime"] = {"dateTime": f"{due_date}T00:00:00.000Z", "timeZone": "UTC"}
         
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         resp = requests.post(url, json=payload, headers=headers)
@@ -279,7 +285,9 @@ class SyncEngine:
                 # To Do изменился
                 if current_todo_hash != saved_todo_hash:
                     t_desc = (todo.get("body") or {}).get("content") or ""
-                    t_due = todo_date_to_kaiten_date(todo.get("dueDateTime", {}).get("dateTime"))
+                    original_due = todo.get("dueDateTime", {}).get("dateTime")
+                    t_due = todo_date_to_kaiten_date(original_due)
+                    logger.info(f"DEBUG: To Do -> Kaiten | Задача '{todo['title']}' | Оригинальная дата: {original_due} | Конвертированная дата: {t_due}")
                     if self.kaiten_client.update_card(kaiten_id, title=todo["title"], description=t_desc, due_date=t_due):
                         # Сразу обновляем хэш в маппинге, чтобы избежать гонки
                         updated_card = {
@@ -296,11 +304,13 @@ class SyncEngine:
                     k_desc = card.get("description") or ""
                     k_due = card.get("due_date")
                     k_status = "completed" if card.get("state") == 2 else "notStarted"
+                    converted_due = kaiten_date_to_todo_date(k_due) if k_due else None
+                    logger.info(f"DEBUG: Kaiten -> To Do | Карточка '{card['title']}' | Оригинальная дата: {k_due} | Конвертированная дата: {converted_due}")
                     self.todo_client.update_task(
                         token, list_id, todo_id,
                         title=card["title"],
                         description=k_desc,
-                        due_date=kaiten_date_to_todo_date(k_due) if k_due else None,
+                        due_date=converted_due,
                         status=k_status
                     )
                     meta["kaiten_hash"] = current_kaiten_hash
@@ -315,7 +325,9 @@ class SyncEngine:
                 if todo["status"] == "completed":
                     continue
                 t_desc = (todo.get("body") or {}).get("content") or ""
-                t_due = todo_date_to_kaiten_date(todo.get("dueDateTime", {}).get("dateTime"))
+                original_due = todo.get("dueDateTime", {}).get("dateTime")
+                t_due = todo_date_to_kaiten_date(original_due)
+                logger.info(f"DEBUG: NEW TASK To Do -> Kaiten | Задача '{todo['title']}' | Оригинальная дата: {original_due} | Конвертированная дата: {t_due}")
                 card_id = self.kaiten_client.create_card(title=todo["title"], description=t_desc, due_date=t_due)
                 if card_id:
                     # Эмулируем состояние карточки для корректного хэша
@@ -332,6 +344,54 @@ class SyncEngine:
                         "todo_hash": todo_hash,
                         "kaiten_hash": kaiten_hash
                     }
+
+            # Создание новых задач из Kaiten в To Do
+            for kaiten_id, card in kaiten_cards.items():
+                # Проверяем, есть ли уже сопоставление для этой карточки
+                todo_id = None
+                for t_id, meta in mapping.items():
+                    if meta["kaiten_card_id"] == kaiten_id:
+                        todo_id = t_id
+                        break
+                
+                # Если карточка Kaiten не имеет соответствующей задачи To Do, создаем новую задачу
+                if not todo_id:
+                    k_desc = card.get("description") or ""
+                    k_due = card.get("due_date")
+                    # Определяем статус задачи в To Do на основе статуса карточки Kaiten
+                    status = "completed" if card.get("state") == 2 else "notStarted"
+                    
+                    # Преобразуем дату из формата Kaiten в формат To Do
+                    due_date_for_todo = kaiten_date_to_todo_date(k_due) if k_due else None
+                    logger.info(f"DEBUG: NEW TASK Kaiten -> To Do | Карточка '{card['title']}' | Оригинальная дата: {k_due} | Конвертированная дата: {due_date_for_todo}")
+                    # Создаем задачу в To Do
+                    new_todo_id = self.todo_client.create_task(
+                        token,
+                        list_id,
+                        title=card["title"],
+                        description=k_desc,
+                        due_date=due_date_for_todo,
+                        status=status
+                    )
+                    
+                    if new_todo_id:
+                        # Обновляем маппинг
+                        fake_todo = {
+                            "title": card["title"],
+                            "body": {"content": k_desc, "contentType": "text"},
+                            "dueDateTime": {"dateTime": kaiten_date_to_todo_date(k_due), "timeZone": "UTC"} if k_due else None,
+                            "status": status
+                        }
+                        # Удаляем dueDateTime из fake_todo, если k_due равно None
+                        if not k_due:
+                            fake_todo.pop("dueDateTime")
+                        todo_hash = compute_todo_hash(fake_todo)
+                        kaiten_hash = compute_kaiten_hash(card)
+                        mapping[new_todo_id] = {
+                            "kaiten_card_id": kaiten_id,
+                            "todo_hash": todo_hash,
+                            "kaiten_hash": kaiten_hash
+                        }
 
             # Удаление задач
             for todo_id, meta in list(mapping.items()):
