@@ -1,0 +1,27 @@
+# Environment variables
+.env
+token_cache.bin
+
+# Logs
+*.log
+sync.log
+sync_scheduler.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
